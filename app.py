@@ -4,50 +4,51 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import pandas as pd
 
-# --- [1] 구글 시트 연결 ---
-
+# --- [1] 구글 시트 연결 설정 (줄바꿈 문자 해결 버전) ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # 1. secrets 정보를 일반 딕셔너리로 변환 (수정 가능하게 만들기 위해)
-    # st.secrets 객체는 수정이 불가능해서 dict()로 복사해야 합니다.
+    # [핵심 수정] st.secrets 데이터를 수정 가능한 딕셔너리로 변환
     key_dict = dict(st.secrets["gcp_service_account"])
     
-    # 2. [핵심!] private_key 안에 있는 "\n" 글자를 실제 줄바꿈으로 강제 변환
+    # [핵심 수정] 잘못된 줄바꿈 문자(\\n)를 진짜 줄바꿈(\n)으로 교체
     key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
     
-    # 3. 수정된 딕셔너리로 인증 정보 생성
+    # 수정된 key_dict를 사용하여 인증 (st.secrets를 직접 쓰면 안됨!)
     creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
     client = gspread.authorize(creds)
     return client
 
 client = init_connection()
-# 시트 이름 설정 (본인의 구글 시트 제목)
-url = "https://docs.google.com/spreadsheets/d/1Q4YJBhdUEHwYdMFMSFqbhyNG73z6l2rCObsKALol7IM/edit?gid=0#gid=0"
-sh = client.open_by_url(url)
 
-# 각 워크시트 가져오기
+# --- [2] 시트 연결 ---
+# 본인의 구글 시트 주소로 교체하세요!
+url = "https://docs.google.com/spreadsheets/d/1Q4YJBhdUEHwYdMFMSFqbhyNG73z6l2rCObsKALol7IM/edit?gid=0#gid=0" 
+
+try:
+    sh = client.open_by_url(url)
+except Exception as e:
+    st.error(f"시트 연결 실패! 공유 설정과 URL을 확인하세요. 에러내용: {e}")
+    st.stop()
+
 ws_users = sh.worksheet("Users")
 ws_matches = sh.worksheet("Matches")
 ws_bets = sh.worksheet("Bets")
 
-# --- [2] 함수 정의 ---
+# --- [3] 함수 정의 ---
 
 def get_user_data(nickname):
-    """유저 정보를 가져오거나 없으면 새로 생성"""
     users = ws_users.get_all_records()
     for user in users:
-        if user['nickname'] == nickname:
+        if str(user['nickname']) == str(nickname):
             return user
     
-    # 신규 유저라면 등록
-    new_user = {'nickname': nickname, 'balance': 10000} # 가입 축하금
+    new_user = {'nickname': nickname, 'balance': 10000}
     ws_users.append_row([nickname, 10000])
     return new_user
 
 def update_balance(nickname, amount):
-    """잔액 업데이트 (차감 또는 충전)"""
     cell = ws_users.find(nickname)
     current_balance = int(ws_users.cell(cell.row, 2).value)
     new_balance = current_balance + amount
@@ -55,13 +56,12 @@ def update_balance(nickname, amount):
     return new_balance
 
 def place_bet(nickname, match_id, choice, amount):
-    """베팅 내역 저장 및 잔액 차감"""
     update_balance(nickname, -amount)
     ws_bets.append_row([
         nickname, match_id, choice, amount, str(datetime.now())
     ])
 
-# --- [3] UI 디자인 ---
+# --- [4] UI 디자인 ---
 st.set_page_config(page_title="캠퍼스 토토 (Live)", page_icon="⚽")
 st.title("⚽ 캠퍼스 챔피언스리그 토토")
 
@@ -85,7 +85,6 @@ with st.sidebar:
 matches = ws_matches.get_all_records()
 df_matches = pd.DataFrame(matches)
 
-# 'WAITING' 상태인 경기만 필터링
 if not df_matches.empty and 'status' in df_matches.columns:
     active_matches = df_matches[df_matches['status'] == 'WAITING']
 else:
@@ -105,7 +104,6 @@ else:
             col2.metric("무승부", match['draw_odds'])
             col3.metric(f"{match['away']} 승", match['away_odds'])
             
-            # 베팅 UI
             with st.expander("베팅하기"):
                 choice = st.radio(
                     "선택", 
@@ -132,10 +130,10 @@ else:
 
             st.markdown("---")
 
-# 내 베팅 기록 보기
+# 내 베팅 기록
 st.subheader("📜 나의 베팅 기록")
 all_bets = ws_bets.get_all_records()
-my_bets = [bet for bet in all_bets if bet['nickname'] == nickname]
+my_bets = [bet for bet in all_bets if str(bet['nickname']) == str(nickname)]
 
 if my_bets:
     st.table(pd.DataFrame(my_bets)[['match_id', 'choice', 'amount', 'timestamp']])
