@@ -5,12 +5,20 @@ from datetime import datetime
 import pandas as pd
 
 # --- [1] 구글 시트 연결 ---
+
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # 다시 st.secrets를 사용하도록 변경 (보안 필수!)
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+    # 1. secrets 정보를 일반 딕셔너리로 변환 (수정 가능하게 만들기 위해)
+    # st.secrets 객체는 수정이 불가능해서 dict()로 복사해야 합니다.
+    key_dict = dict(st.secrets["gcp_service_account"])
+    
+    # 2. [핵심!] private_key 안에 있는 "\n" 글자를 실제 줄바꿈으로 강제 변환
+    key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+    
+    # 3. 수정된 딕셔너리로 인증 정보 생성
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
     client = gspread.authorize(creds)
     return client
 
