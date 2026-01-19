@@ -148,7 +148,7 @@ with st.sidebar:
     # 2. 관리자 탭 (비밀번호 걸기)
     with tab2:
         admin_pw = st.text_input("관리자 암호", type="password")
-        if admin_pw == "admin1234":  # 👈 원하는 비밀번호로 바꾸세요
+        if admin_pw == "fineplay1234":  # 👈 원하는 비밀번호로 바꾸세요
             st.error("⚠️ 관리자 모드")
             if st.button("💰 경기 결과 정산하기"):
                 run_admin_settlement()
