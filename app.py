@@ -98,6 +98,52 @@ def calculate_auto_odds(home_elo, away_elo):
     odds_away = max(1.05, round(1 / real_prob_away, 2))
     return odds_home, odds_draw, odds_away
 
+# --- [추가 기능] 경기 후 팀 ELO 점수 업데이트 함수 ---
+def update_team_elo(home_team, away_team, result):
+    """
+    경기 결과에 따라 두 팀의 ELO 점수를 갱신하고 구글 시트에 저장
+    K-Factor = 32 (대회용으로 변동폭을 좀 크게 설정)
+    """
+    K = 32 
+    
+    # 1. 현재 점수 가져오기
+    try:
+        # Teams 시트에서 셀 찾기
+        cell_h = ws_teams.find(home_team)
+        cell_a = ws_teams.find(away_team)
+        
+        # elo는 B열(2번째 열)에 있다고 가정
+        elo_h = int(ws_teams.cell(cell_h.row, 2).value)
+        elo_a = int(ws_teams.cell(cell_a.row, 2).value)
+    except Exception as e:
+        st.error(f"팀 점수 불러오기 실패: {e}")
+        return
+
+    # 2. 예상 승률 계산 (기존 공식 재사용)
+    diff = elo_h - elo_a
+    expected_h = 1 / (1 + 10 ** (-diff / 400))
+    expected_a = 1 - expected_h
+    
+    # 3. 실제 결과 점수화 (승=1, 무=0.5, 패=0)
+    if result == 'HOME':
+        actual_h, actual_a = 1, 0
+    elif result == 'DRAW':
+        actual_h, actual_a = 0.5, 0.5
+    elif result == 'AWAY':
+        actual_h, actual_a = 0, 1
+    else:
+        return # 결과값 오류 시 중단
+
+    # 4. 새 점수 계산 (공식: 기존 + K * (실제 - 예상))
+    new_elo_h = round(elo_h + K * (actual_h - expected_h))
+    new_elo_a = round(elo_a + K * (actual_a - expected_a))
+    
+    # 5. 구글 시트에 업데이트
+    ws_teams.update_cell(cell_h.row, 2, new_elo_h)
+    ws_teams.update_cell(cell_a.row, 2, new_elo_a)
+    
+    st.toast(f"📈 점수 변동: {home_team} {new_elo_h}({new_elo_h - elo_h:+}) / {away_team} {new_elo_a}({new_elo_a - elo_a:+})")
+
 def run_admin_settlement():
     """관리자용: 종료된 경기 정산"""
     st.info("정산을 시작합니다... 잠시만 기다려주세요.")
@@ -128,7 +174,11 @@ def run_admin_settlement():
             continue # 결과 입력 오류시 패스
 
         st.write(f"🔄 **{match['home']} vs {match['away']}** 정산 중... (결과: {result})")
-        
+
+        # 정산하면서 팀 점수도 같이 업데이트 (Teams 시트가 있을 때만)
+        if ws_teams:
+            update_team_elo(match['home'], match['away'], result)
+            
         # 당첨자 찾기
         match_bets = bets[bets['match_id'] == match_id]
         for b_idx, bet in match_bets.iterrows():
