@@ -166,7 +166,7 @@ with st.sidebar:
     # [탭 2] 관리자
     with tab2:
         admin_pw = st.text_input("관리자 암호", type="password", key="admin_pw_input")
-        if admin_pw == "admin1234":
+        if admin_pw == "fineplay1234":
             st.success("🔓 관리자 모드")
             
             st.markdown("### 📝 경기 등록")
