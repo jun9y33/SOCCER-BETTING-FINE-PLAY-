@@ -191,89 +191,105 @@ def calculate_auto_odds(home_elo, away_elo):
     return odds_home, odds_draw, odds_away
 
 # ... (기존 시트 연결 코드는 그대로 유지) ...
-# ws_teams = sh.worksheet("Teams")  <-- 이 줄을 시트 연결 부분에 추가하세요!
 
-# --- [2] 관리자 탭 UI 코드 (이부분을 기존 관리자 탭에 덮어쓰기) ---
-    with tab2: # 관리자 탭
+
+
+# --- [3] UI 디자인 및 사이드바 ---
+st.set_page_config(page_title="DDC CAMP-US CUP TOTO", page_icon="⚽")
+
+# [중요] Teams 시트 연결 시도 (없으면 에러 방지)
+try:
+    ws_teams = sh.worksheet("Teams")
+except:
+    ws_teams = None
+
+# ▼▼▼ 여기서부터 사이드바 코드 시작 ▼▼▼
+with st.sidebar:
+    st.title("⚽ 메뉴")
+    
+    # 탭 생성 (이 줄이 없으면 탭도, 입력창도 안 나옵니다!)
+    tab1, tab2 = st.tabs(["로그인", "관리자"])
+    
+    # -------------------------------------------------------
+    # 1. 일반 로그인 탭
+    # -------------------------------------------------------
+    with tab1:
+        nickname = st.text_input("닉네임 입력", key="login_id")
+        user_info = None
+        if nickname:
+            user_info = get_user_data(nickname)
+            st.success(f"{nickname}님 접속 중")
+            st.metric("보유 포인트", f"{user_info['balance']:,} P")
+            if st.button("내 잔액 새로고침"):
+                st.rerun()
+
+    # -------------------------------------------------------
+    # 2. 관리자 탭 (수정된 부분)
+    # -------------------------------------------------------
+    with tab2:
+        # [체크포인트] 이 줄이 있어야 입력창이 뜹니다!
         admin_pw = st.text_input("관리자 암호", type="password")
         
         if admin_pw == "admin1234":
             st.success("🔓 관리자 모드 접속 완료")
             
-            # --- [기능 A] 경기 등록하기 (New!) ---
-            st.subheader("📝 새 경기 등록 (배당률 자동 산출)")
+            # --- [기능 A] 경기 등록하기 (배당률 자동) ---
+            st.subheader("📝 새 경기 등록")
             
-            # Teams 시트에서 팀 목록 가져오기
-            try:
-                ws_teams = sh.worksheet("Teams") # Teams 시트 연결
-                teams_data = ws_teams.get_all_records()
-                df_teams = pd.DataFrame(teams_data)
-                team_list = df_teams['team_name'].tolist()
-            except:
-                st.error("'Teams' 시트가 없습니다! 구글 시트에 탭을 만들어주세요.")
-                team_list = []
-
-            if team_list:
-                col1, col2 = st.columns(2)
-                home_team = col1.selectbox("홈 팀", team_list)
-                away_team = col2.selectbox("원정 팀", team_list, index=1)
-                
-                # 선택된 팀의 ELO 점수 찾기
-                home_elo = df_teams[df_teams['team_name'] == home_team]['elo'].values[0]
-                away_elo = df_teams[df_teams['team_name'] == away_team]['elo'].values[0]
-                
-                # 배당률 미리보기 계산
-                o_h, o_d, o_a = calculate_auto_odds(home_elo, away_elo)
-                
-                st.info(f"📊 전력 분석: {home_team}({home_elo}) vs {away_team}({away_elo})")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("홈승 배당", o_h)
-                c2.metric("무승부 배당", o_d)
-                c3.metric("원정승 배당", o_a)
-                
-                if st.button("이대로 경기 등록하기"):
-                    # 구글 시트 Matches 탭에 저장
-                    # ID 생성 (M + 현재시간 초단위)
-                    new_id = f"M{int(time.time())}"
+            if ws_teams is None:
+                st.error("⚠️ 구글 시트에 'Teams' 탭이 없습니다! 먼저 만들어주세요.")
+            else:
+                # Teams 데이터 가져오기
+                try:
+                    teams_data = ws_teams.get_all_records()
+                    df_teams = pd.DataFrame(teams_data)
+                    team_list = df_teams['team_name'].tolist()
                     
-                    ws_matches.append_row([
-                        new_id, home_team, away_team, 
-                        o_h, o_d, o_a, 
-                        "WAITING", "" # status, result
-                    ])
-                    st.success(f"✅ {home_team} vs {away_team} 경기가 등록되었습니다!")
-                    time.sleep(1) # 잠시 대기 후
-                    st.rerun()    # 새로고침
-            
+                    if not team_list:
+                        st.warning("Teams 시트에 팀 데이터가 비어있습니다.")
+                    else:
+                        col1, col2 = st.columns(2)
+                        home_team = col1.selectbox("홈 팀", team_list, key="sel_home")
+                        away_team = col2.selectbox("원정 팀", team_list, index=min(1, len(team_list)-1), key="sel_away")
+                        
+                        # ELO 점수 찾기
+                        home_elo = df_teams[df_teams['team_name'] == home_team]['elo'].values[0]
+                        away_elo = df_teams[df_teams['team_name'] == away_team]['elo'].values[0]
+                        
+                        # 배당률 계산
+                        o_h, o_d, o_a = calculate_auto_odds(home_elo, away_elo)
+                        
+                        st.info(f"📊 {home_team}({home_elo}) vs {away_team}({away_elo})")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("홈승", o_h)
+                        c2.metric("무승부", o_d)
+                        c3.metric("원정승", o_a)
+                        
+                        if st.button("경기 등록하기", key="btn_reg"):
+                            new_id = f"M{int(time.time())}"
+                            ws_matches.append_row([
+                                new_id, home_team, away_team, 
+                                o_h, o_d, o_a, 
+                                "WAITING", "" 
+                            ])
+                            st.success("등록 완료!")
+                            time.sleep(1)
+                            st.rerun()
+
+                except Exception as e:
+                    st.error(f"데이터 로딩 오류: {e}")
+
             st.markdown("---")
             
-            # --- [기능 B] 기존 정산 기능 ---
+            # --- [기능 B] 정산하기 ---
             st.subheader("💰 경기 결과 정산")
             if st.button("종료된 경기 일괄 정산하기"):
                 run_admin_settlement()
                 
         elif admin_pw:
             st.warning("암호가 틀렸습니다.")
+# ▲▲▲ 여기까지 사이드바 코드 끝 ▲▲▲
 
-            
-st.title("⚽ DDC CAMP-US CUP TOTO")
-
-# 탭 만들기
-tab1, tab2 = st.tabs(["🔥 베팅하기", "🏆 랭킹"])
-
-with tab1:
-    # 기존의 경기 목록 및 베팅 코드들을 여기에 넣습니다.
-    # (들여쓰기 주의!)
-    st.markdown("### 📅 진행 중인 경기")
-    # ... (기존 for loop 코드) ...
-
-with tab2:
-    # 방금 만든 랭킹 함수 실행
-    show_ranking()
-
-if not nickname:
-    st.info("👈 왼쪽 사이드바에서 닉네임을 입력해주세요.")
-    st.stop()
 
 # --- 메인 로직 (경기 목록 등) ---
 # (기존 코드와 동일)
