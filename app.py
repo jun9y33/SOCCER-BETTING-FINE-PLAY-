@@ -168,17 +168,94 @@ with st.sidebar:
             if st.button("내 잔액 새로고침"):
                 st.rerun()
 
+
     # 2. 관리자 탭 (비밀번호 걸기)
-    with tab2:
+# --- [기존 import 문 아래에 수학 라이브러리 추가] ---
+import math
+
+# --- [1] 배당률 자동 계산 함수 (ELO 공식 적용) ---
+def calculate_auto_odds(home_elo, away_elo):
+    diff = home_elo - away_elo
+    # 승리 확률 계산 (로지스틱 곡선)
+    prob_home = 1 / (1 + 10 ** (-diff / 400))
+    prob_draw = 0.30 * (1 - abs(prob_home - 0.5) * 2) # 무승부 확률 보정
+    
+    real_prob_home = prob_home * (1 - prob_draw)
+    real_prob_away = (1 - prob_home) * (1 - prob_draw)
+    
+    # 1.05배 미만은 재미없으니 최소 배당 보정
+    odds_home = max(1.05, round(1 / real_prob_home, 2))
+    odds_draw = max(1.05, round(1 / prob_draw, 2))
+    odds_away = max(1.05, round(1 / real_prob_away, 2))
+    
+    return odds_home, odds_draw, odds_away
+
+# ... (기존 시트 연결 코드는 그대로 유지) ...
+# ws_teams = sh.worksheet("Teams")  <-- 이 줄을 시트 연결 부분에 추가하세요!
+
+# --- [2] 관리자 탭 UI 코드 (이부분을 기존 관리자 탭에 덮어쓰기) ---
+    with tab2: # 관리자 탭
         admin_pw = st.text_input("관리자 암호", type="password")
-        if admin_pw == "fineplay1234":  # 👈 원하는 비밀번호로 바꾸세요
-            st.error("⚠️ 관리자 모드")
-            if st.button("💰 경기 결과 정산하기"):
+        
+        if admin_pw == "admin1234":
+            st.success("🔓 관리자 모드 접속 완료")
+            
+            # --- [기능 A] 경기 등록하기 (New!) ---
+            st.subheader("📝 새 경기 등록 (배당률 자동 산출)")
+            
+            # Teams 시트에서 팀 목록 가져오기
+            try:
+                ws_teams = sh.worksheet("Teams") # Teams 시트 연결
+                teams_data = ws_teams.get_all_records()
+                df_teams = pd.DataFrame(teams_data)
+                team_list = df_teams['team_name'].tolist()
+            except:
+                st.error("'Teams' 시트가 없습니다! 구글 시트에 탭을 만들어주세요.")
+                team_list = []
+
+            if team_list:
+                col1, col2 = st.columns(2)
+                home_team = col1.selectbox("홈 팀", team_list)
+                away_team = col2.selectbox("원정 팀", team_list, index=1)
+                
+                # 선택된 팀의 ELO 점수 찾기
+                home_elo = df_teams[df_teams['team_name'] == home_team]['elo'].values[0]
+                away_elo = df_teams[df_teams['team_name'] == away_team]['elo'].values[0]
+                
+                # 배당률 미리보기 계산
+                o_h, o_d, o_a = calculate_auto_odds(home_elo, away_elo)
+                
+                st.info(f"📊 전력 분석: {home_team}({home_elo}) vs {away_team}({away_elo})")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("홈승 배당", o_h)
+                c2.metric("무승부 배당", o_d)
+                c3.metric("원정승 배당", o_a)
+                
+                if st.button("이대로 경기 등록하기"):
+                    # 구글 시트 Matches 탭에 저장
+                    # ID 생성 (M + 현재시간 초단위)
+                    new_id = f"M{int(time.time())}"
+                    
+                    ws_matches.append_row([
+                        new_id, home_team, away_team, 
+                        o_h, o_d, o_a, 
+                        "WAITING", "" # status, result
+                    ])
+                    st.success(f"✅ {home_team} vs {away_team} 경기가 등록되었습니다!")
+                    time.sleep(1) # 잠시 대기 후
+                    st.rerun()    # 새로고침
+            
+            st.markdown("---")
+            
+            # --- [기능 B] 기존 정산 기능 ---
+            st.subheader("💰 경기 결과 정산")
+            if st.button("종료된 경기 일괄 정산하기"):
                 run_admin_settlement()
+                
         elif admin_pw:
             st.warning("암호가 틀렸습니다.")
 
-
+            
 st.title("⚽ DDC CAMP-US CUP TOTO")
 
 # 탭 만들기
