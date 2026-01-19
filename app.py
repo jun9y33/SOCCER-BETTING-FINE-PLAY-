@@ -123,6 +123,29 @@ def run_admin_settlement():
     st.balloons()
     st.success(f"총 {success_count}개 경기 정산 완료!")
 
+def show_ranking():
+    st.subheader("🏆 명예의 전당 (Top 10)")
+    
+    # [1] 데이터 프레임 변환
+    data = ws_users.get_all_records()
+    df = pd.DataFrame(data)
+
+    # [2] 데이터 정렬 (내림차순)
+    # balance 컬럼을 기준으로 높은 숫자부터 정렬
+    df_sorted = df.sort_values(by='balance', ascending=False)
+
+    # [3] 등수 매기기 (인덱스 재설정)
+    # 정렬 후 섞인 번호를 0, 1, 2... 순서로 다시 매김
+    df_sorted = df_sorted.reset_index(drop=True)
+    df_sorted.index = df_sorted.index + 1  # 0등은 없으므로 1을 더해서 1등부터 시작
+
+    # [4] 화면 출력
+    # 전체 데이터 중 'nickname'과 'balance' 컬럼만 뽑아서 상위 10개 표시
+    st.dataframe(
+        df_sorted[['nickname', 'balance']].head(10), 
+        use_container_width=True
+    )
+
 
 # --- [3] UI 디자인 ---
 st.set_page_config(page_title="캠퍼스 토토", page_icon="⚽")
@@ -155,7 +178,21 @@ with st.sidebar:
         elif admin_pw:
             st.warning("암호가 틀렸습니다.")
 
-st.title("⚽ 캠퍼스 챔피언스리그 토토")
+
+st.title("⚽ DDC CAMP-US CUP TOTO")
+
+# 탭 만들기
+tab1, tab2 = st.tabs(["🔥 베팅하기", "🏆 랭킹"])
+
+with tab1:
+    # 기존의 경기 목록 및 베팅 코드들을 여기에 넣습니다.
+    # (들여쓰기 주의!)
+    st.markdown("### 📅 진행 중인 경기")
+    # ... (기존 for loop 코드) ...
+
+with tab2:
+    # 방금 만든 랭킹 함수 실행
+    show_ranking()
 
 if not nickname:
     st.info("👈 왼쪽 사이드바에서 닉네임을 입력해주세요.")
