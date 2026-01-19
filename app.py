@@ -43,16 +43,32 @@ except Exception as e:
 
 # --- [2] 핵심 로직 함수들 ---
 
-def get_user_data(nickname):
-    """유저 정보 조회 및 신규 생성"""
-    users = ws_users.get_all_records()
-    for user in users:
-        if str(user['nickname']) == str(nickname):
-            return user
-    new_user = {'nickname': nickname, 'balance': 10000}
-    ws_users.append_row([nickname, 10000])
-    return new_user
+# --- [2] 핵심 로직 함수들 (수정됨) ---
 
+def check_user_exists(nickname):
+    """닉네임 중복 여부 확인 (True: 존재함, False: 없음)"""
+    try:
+        # 1열(nickname) 전체 데이터를 가져와서 확인
+        existing_nicknames = ws_users.col_values(1)
+        return str(nickname) in [str(n) for n in existing_nicknames]
+    except:
+        return False
+
+def create_new_user(nickname):
+    """신규 유저 생성"""
+    # 초기 자금 10000 포인트
+    ws_users.append_row([nickname, 10000])
+    return {'nickname': nickname, 'balance': 10000}
+
+def get_user_info(nickname):
+    """유저 정보 가져오기 (존재할 때만)"""
+    try:
+        cell = ws_users.find(nickname)
+        balance = ws_users.cell(cell.row, 2).value
+        return {'nickname': nickname, 'balance': int(balance)}
+    except:
+        return None
+    
 def update_balance(nickname, amount):
     """잔액 변경 (베팅 차감 or 당첨금 지급)"""
     cell = ws_users.find(nickname)
@@ -151,18 +167,66 @@ with st.sidebar:
     st.title("⚽ 메뉴")
     tab1, tab2 = st.tabs(["로그인", "관리자"])
     
-    # [탭 1] 로그인
+    # [탭 1] 로그인/회원가입 (수정됨)
     with tab1:
-        # [수정] 혹시 모를 에러 방지를 위해 key값 뒤에 _sidebar 붙임
+        # 로그인 vs 회원가입 선택하기
+        auth_mode = st.radio("모드 선택", ["로그인", "회원가입"], horizontal=True)
+        
         nickname_input = st.text_input("닉네임 입력", key="login_id_sidebar")
-        if nickname_input:
-            nickname = nickname_input # 전역 변수에 저장
-            user_info = get_user_data(nickname)
-            st.success(f"✅ {nickname}님 환영합니다!")
-            st.metric("내 포인트", f"{user_info['balance']:,} P")
-            if st.button("새로고침"):
+        
+        if st.button("확인"):
+            if not nickname_input:
+                st.warning("닉네임을 입력해주세요.")
+            else:
+                # 1. 존재 여부 확인
+                is_exist = check_user_exists(nickname_input)
+                
+                # --- [A] 로그인 모드 ---
+                if auth_mode == "로그인":
+                    if is_exist:
+                        # 성공: 전역 변수에 저장
+                        st.session_state['nickname'] = nickname_input
+                        st.session_state['user_info'] = get_user_info(nickname_input)
+                        st.success(f"✅ {nickname_input}님 환영합니다!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("❌ 존재하지 않는 닉네임입니다. 회원가입을 먼저 해주세요.")
+
+                # --- [B] 회원가입 모드 ---
+                elif auth_mode == "회원가입":
+                    if is_exist:
+                        st.error("⚠️ 이미 존재하는 이름입니다! 다른 닉네임을 사용해주세요.")
+                    else:
+                        # 성공: 신규 생성
+                        new_user = create_new_user(nickname_input)
+                        st.session_state['nickname'] = nickname_input
+                        st.session_state['user_info'] = new_user
+                        st.success(f"🎉 가입 축하합니다! {nickname_input}님.")
+                        st.balloons() # 가입 축하 풍선
+                        time.sleep(1)
+                        st.rerun()
+
+        # 로그인 상태 유지 (새로고침 해도 안 풀리게 session_state 사용)
+        if 'nickname' in st.session_state and st.session_state['nickname']:
+            nickname = st.session_state['nickname']
+            user_info = st.session_state['user_info']
+            
+            st.markdown("---")
+            st.info(f"👤 **{nickname}**님 접속 중")
+            
+            # 실시간 잔액 조회 (버튼 누를 때만)
+            if st.button("내 포인트 확인"):
+                info = get_user_info(nickname)
+                st.session_state['user_info'] = info # 최신 정보 업데이트
+                st.metric("현재 잔액", f"{info['balance']:,} P")
+            
+            if st.button("로그아웃"):
+                del st.session_state['nickname']
+                del st.session_state['user_info']
                 st.rerun()
 
+                
     # [탭 2] 관리자
     with tab2:
         admin_pw = st.text_input("관리자 암호", type="password", key="admin_pw_input")
