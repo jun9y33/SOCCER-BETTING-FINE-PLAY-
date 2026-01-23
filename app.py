@@ -6,25 +6,22 @@ import pandas as pd
 import time
 import math
 
-# --- [0] 기본 설정 (반드시 맨 처음에 와야 함!) ---
-st.set_page_config(page_title="DDC CAMP-US CUP TOTO", page_icon="⚽", layout="wide")
+# --- [0] 기본 설정 ---
+st.set_page_config(page_title="DDC CAMP-US CUP BETTING", page_icon="⚽", layout="wide")
 
 # --- [1] 구글 시트 연결 설정 ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # Secrets에서 정보 가져오기 & 줄바꿈 문자 처리
     key_dict = dict(st.secrets["gcp_service_account"])
     key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-    
     creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
     client = gspread.authorize(creds)
     return client
 
 client = init_connection()
 
-# 본인의 구글 시트 주소 (URL)
+# 본인의 구글 시트 주소
 url = "https://docs.google.com/spreadsheets/d/1Q4YJBhdUEHwYdMFMSFqbhyNG73z6l2rCObsKALol7IM/edit?gid=0#gid=0" 
 
 try:
@@ -32,23 +29,18 @@ try:
     ws_users = sh.worksheet("Users")
     ws_matches = sh.worksheet("Matches")
     ws_bets = sh.worksheet("Bets")
-    # Teams 시트는 없을 수도 있으니 예외처리
     try:
         ws_teams = sh.worksheet("Teams")
     except:
         ws_teams = None
 except Exception as e:
-    st.error(f"시트 연결 실패! 공유 설정과 시트 이름(Users, Matches, Bets)을 확인하세요.\n에러 내용: {e}")
+    st.error(f"시트 연결 실패! {e}")
     st.stop()
 
 # --- [2] 핵심 로직 함수들 ---
 
-# --- [2] 핵심 로직 함수들 (수정됨) ---
-
 def check_user_exists(nickname):
-    """닉네임 중복 여부 확인 (True: 존재함, False: 없음)"""
     try:
-        # 1열(nickname) 전체 데이터를 가져와서 확인
         existing_nicknames = ws_users.col_values(1)
         return str(nickname) in [str(n) for n in existing_nicknames]
     except:
@@ -56,12 +48,13 @@ def check_user_exists(nickname):
 
 def create_new_user(nickname):
     """신규 유저 생성"""
-    # 초기 자금 10000 포인트
-    ws_users.append_row([nickname, 10000])
-    return {'nickname': nickname, 'balance': 10000}
+    # [수정] 초기 자금을 3000으로 변경
+    initial_balance = 3000 
+    
+    ws_users.append_row([nickname, initial_balance])
+    return {'nickname': nickname, 'balance': initial_balance}
 
 def get_user_info(nickname):
-    """유저 정보 가져오기 (존재할 때만)"""
     try:
         cell = ws_users.find(nickname)
         balance = ws_users.cell(cell.row, 2).value
@@ -70,7 +63,6 @@ def get_user_info(nickname):
         return None
     
 def update_balance(nickname, amount):
-    """잔액 변경 (베팅 차감 or 당첨금 지급)"""
     cell = ws_users.find(nickname)
     current_balance = int(ws_users.cell(cell.row, 2).value)
     new_balance = current_balance + amount
@@ -78,82 +70,72 @@ def update_balance(nickname, amount):
     return new_balance
 
 def place_bet(nickname, match_id, choice, amount):
-    """베팅 실행"""
     update_balance(nickname, -amount)
     ws_bets.append_row([
         nickname, match_id, choice, amount, str(datetime.now())
     ])
 
 def calculate_auto_odds(home_elo, away_elo):
-    """ELO 점수 기반 배당률 자동 계산"""
     diff = home_elo - away_elo
     prob_home = 1 / (1 + 10 ** (-diff / 400))
     prob_draw = 0.30 * (1 - abs(prob_home - 0.5) * 2)
-    
     real_prob_home = prob_home * (1 - prob_draw)
     real_prob_away = (1 - prob_home) * (1 - prob_draw)
-    
     odds_home = max(1.05, round(1 / real_prob_home, 2))
     odds_draw = max(1.05, round(1 / prob_draw, 2))
     odds_away = max(1.05, round(1 / real_prob_away, 2))
     return odds_home, odds_draw, odds_away
 
-# --- [추가 기능] 경기 후 팀 ELO 점수 업데이트 함수 ---
-def update_team_elo(home_team, away_team, result):
-    """
-    경기 결과에 따라 두 팀의 ELO 점수를 갱신하고 구글 시트에 저장
-    K-Factor = 32 (대회용으로 변동폭을 좀 크게 설정)
-    """
-    K = 32 
-    
-    # 1. 현재 점수 가져오기
+def update_team_elo_advanced(home_team, away_team, result, h_xg, a_xg, h_pass, a_pass, h_ppda, a_ppda):
+    K = 32
     try:
-        # Teams 시트에서 셀 찾기
         cell_h = ws_teams.find(home_team)
         cell_a = ws_teams.find(away_team)
-        
-        # elo는 B열(2번째 열)에 있다고 가정
         elo_h = int(ws_teams.cell(cell_h.row, 2).value)
         elo_a = int(ws_teams.cell(cell_a.row, 2).value)
-    except Exception as e:
-        st.error(f"팀 점수 불러오기 실패: {e}")
+    except:
+        st.error("팀 정보를 찾을 수 없습니다.")
         return
 
-    # 2. 예상 승률 계산 (기존 공식 재사용)
     diff = elo_h - elo_a
     expected_h = 1 / (1 + 10 ** (-diff / 400))
     expected_a = 1 - expected_h
     
-    # 3. 실제 결과 점수화 (승=1, 무=0.5, 패=0)
-    if result == 'HOME':
-        actual_h, actual_a = 1, 0
-    elif result == 'DRAW':
-        actual_h, actual_a = 0.5, 0.5
-    elif result == 'AWAY':
-        actual_h, actual_a = 0, 1
-    else:
-        return # 결과값 오류 시 중단
-
-    # 4. 새 점수 계산 (공식: 기존 + K * (실제 - 예상))
-    new_elo_h = round(elo_h + K * (actual_h - expected_h))
-    new_elo_a = round(elo_a + K * (actual_a - expected_a))
+    if result == 'HOME': actual_h, actual_a = 1, 0
+    elif result == 'DRAW': actual_h, actual_a = 0.5, 0.5
+    else: actual_h, actual_a = 0, 1
     
-    # 5. 구글 시트에 업데이트
+    base_change_h = K * (actual_h - expected_h)
+    
+    W_XG = 10.0
+    W_PPDA = 1.0
+    W_PASS = 0.1
+    
+    diff_xg = h_xg - a_xg
+    diff_pass = h_pass - a_pass
+    diff_ppda = a_ppda - h_ppda 
+    
+    performance_bonus = (diff_xg * W_XG) + (diff_pass * W_PASS) + (diff_ppda * W_PPDA)
+    
+    total_change = base_change_h + performance_bonus
+    new_elo_h = round(elo_h + total_change)
+    new_elo_a = round(elo_a - total_change)
+    
     ws_teams.update_cell(cell_h.row, 2, new_elo_h)
     ws_teams.update_cell(cell_a.row, 2, new_elo_a)
-    
-    st.toast(f"📈 점수 변동: {home_team} {new_elo_h}({new_elo_h - elo_h:+}) / {away_team} {new_elo_a}({new_elo_a - elo_a:+})")
+    st.toast(f"📊 전술 반영 완료! {home_team}: {new_elo_h}({int(total_change):+})")
 
 def run_admin_settlement():
-    """관리자용: 종료된 경기 정산"""
-    st.info("정산을 시작합니다... 잠시만 기다려주세요.")
+    st.info("정산을 시작합니다...")
     matches = pd.DataFrame(ws_matches.get_all_records())
     bets = pd.DataFrame(ws_bets.get_all_records())
     
     if 'is_settled' not in matches.columns:
-        st.error("Matches 시트에 'is_settled' 헤더(I1 셀)를 만들어주세요!")
+        st.error("Matches 시트에 'is_settled' 헤더가 없습니다!")
         return
 
+    # 안전하게 문자열 변환 후 비교
+    matches['is_settled'] = matches['is_settled'].astype(str)
     targets = matches[(matches['status'] == 'FINISHED') & (matches['is_settled'] != 'TRUE')]
 
     if targets.empty:
@@ -165,21 +147,33 @@ def run_admin_settlement():
         match_id = match['match_id']
         result = match['result']
         
-        # 배당률 가져오기
+        # 데이터 안전하게 가져오기 (빈칸 처리)
+        def get_val(row, col):
+            val = row.get(col, 0)
+            return float(val) if val != '' else 0.0
+
+        h_xg = get_val(match, 'h_xg')
+        a_xg = get_val(match, 'a_xg')
+        h_pass = get_val(match, 'h_pass')
+        a_pass = get_val(match, 'a_pass')
+        h_ppda = get_val(match, 'h_ppda')
+        a_ppda = get_val(match, 'a_ppda')
+        
+        # 배당률
         odds = 1.0
         if result == 'HOME': odds = float(match['home_odds'])
         elif result == 'DRAW': odds = float(match['draw_odds'])
         elif result == 'AWAY': odds = float(match['away_odds'])
-        else:
-            continue # 결과 입력 오류시 패스
+        else: continue
 
         st.write(f"🔄 **{match['home']} vs {match['away']}** 정산 중... (결과: {result})")
 
-        # 정산하면서 팀 점수도 같이 업데이트 (Teams 시트가 있을 때만)
         if ws_teams:
-            update_team_elo(match['home'], match['away'], result)
+            update_team_elo_advanced(
+                match['home'], match['away'], result,
+                h_xg, a_xg, h_pass, a_pass, h_ppda, a_ppda
+            )
             
-        # 당첨자 찾기
         match_bets = bets[bets['match_id'] == match_id]
         for b_idx, bet in match_bets.iterrows():
             if str(bet['choice']) == str(result):
@@ -190,16 +184,16 @@ def run_admin_settlement():
                 except:
                     st.error(f"  -> {bet['nickname']} 지급 실패")
         
-        # 정산 완료 마킹 (I열 = 9번째)
+        # 정산 완료 마킹 (15번째 열 = O열)
+        # Matches 헤더가 바뀌면 이 숫자도 바뀌어야 함! (현재 기준 15)
         m_cell = ws_matches.find(match_id)
-        ws_matches.update_cell(m_cell.row, 9, 'TRUE')
+        ws_matches.update_cell(m_cell.row, 15, 'TRUE')
         success_count += 1
         
     st.balloons()
     st.success(f"총 {success_count}개 경기 정산 완료!")
 
 def show_ranking():
-    """랭킹 보드 출력"""
     data = ws_users.get_all_records()
     df = pd.DataFrame(data)
     if not df.empty:
@@ -209,78 +203,66 @@ def show_ranking():
     else:
         st.text("아직 유저 데이터가 없습니다.")
 
-# --- [3] UI 디자인 (사이드바) ---
-nickname = None # 초기화
-user_info = None
+# --- [3] UI 디자인 ---
+
+# [수정 1] 세션 상태 초기화 (로그인 유지의 핵심)
+if 'nickname' not in st.session_state:
+    st.session_state['nickname'] = None
+if 'user_info' not in st.session_state:
+    st.session_state['user_info'] = None
 
 with st.sidebar:
     st.title("⚽ 메뉴")
     tab1, tab2 = st.tabs(["로그인", "관리자"])
     
-    # [탭 1] 로그인/회원가입 (수정됨)
     with tab1:
-        # 로그인 vs 회원가입 선택하기
         auth_mode = st.radio("모드 선택", ["로그인", "회원가입"], horizontal=True)
-        
         nickname_input = st.text_input("닉네임 입력", key="login_id_sidebar")
         
         if st.button("확인"):
             if not nickname_input:
                 st.warning("닉네임을 입력해주세요.")
             else:
-                # 1. 존재 여부 확인
                 is_exist = check_user_exists(nickname_input)
                 
-                # --- [A] 로그인 모드 ---
                 if auth_mode == "로그인":
                     if is_exist:
-                        # 성공: 전역 변수에 저장
                         st.session_state['nickname'] = nickname_input
                         st.session_state['user_info'] = get_user_info(nickname_input)
-                        st.success(f"✅ {nickname_input}님 환영합니다!")
-                        time.sleep(0.5)
+                        st.success(f"✅ 접속 성공!")
                         st.rerun()
                     else:
-                        st.error("❌ 존재하지 않는 닉네임입니다. 회원가입을 먼저 해주세요.")
-
-                # --- [B] 회원가입 모드 ---
+                        st.error("❌ 존재하지 않는 닉네임입니다.")
                 elif auth_mode == "회원가입":
                     if is_exist:
-                        st.error("⚠️ 이미 존재하는 이름입니다! 다른 닉네임을 사용해주세요.")
+                        st.error("⚠️ 이미 존재하는 이름입니다!")
                     else:
-                        # 성공: 신규 생성
                         new_user = create_new_user(nickname_input)
                         st.session_state['nickname'] = nickname_input
                         st.session_state['user_info'] = new_user
-                        st.success(f"🎉 가입 축하합니다! {nickname_input}님.")
-                        st.balloons() # 가입 축하 풍선
+                        st.success(f"🎉 가입 완료!")
+                        st.balloons()
                         time.sleep(1)
                         st.rerun()
 
-        # 로그인 상태 유지 (새로고침 해도 안 풀리게 session_state 사용)
-        if 'nickname' in st.session_state and st.session_state['nickname']:
-            nickname = st.session_state['nickname']
-            user_info = st.session_state['user_info']
-            
+        # 로그인 상태라면 정보 표시
+        if st.session_state['nickname']:
             st.markdown("---")
-            st.info(f"👤 **{nickname}**님 접속 중")
+            st.info(f"👤 **{st.session_state['nickname']}**님")
             
-            # 실시간 잔액 조회 (버튼 누를 때만)
             if st.button("내 포인트 확인"):
-                info = get_user_info(nickname)
-                st.session_state['user_info'] = info # 최신 정보 업데이트
+                info = get_user_info(st.session_state['nickname'])
+                st.session_state['user_info'] = info
                 st.metric("현재 잔액", f"{info['balance']:,} P")
             
             if st.button("로그아웃"):
-                del st.session_state['nickname']
-                del st.session_state['user_info']
+                st.session_state['nickname'] = None
+                st.session_state['user_info'] = None
                 st.rerun()
-
                 
-    # [탭 2] 관리자
     with tab2:
         admin_pw = st.text_input("관리자 암호", type="password", key="admin_pw_input")
-        if admin_pw == "fineplay1234":
+        if admin_pw == "fineplay1234": # 비번 유지
             st.success("🔓 관리자 모드")
             
             st.markdown("### 📝 경기 등록")
@@ -297,19 +279,24 @@ with st.sidebar:
                         a_elo = teams_df[teams_df['team_name']==a_team]['elo'].values[0]
                         oh, od, oa = calculate_auto_odds(h_elo, a_elo)
                         
-                        st.info(f"예상 배당: 승 {oh} / 무 {od} / 패 {oa}")
+                        st.info(f"예상 배당: {oh} / {od} / {oa}")
                         if st.button("경기 등록", key="reg_btn"):
                             new_id = f"M{int(time.time())}"
-                            ws_matches.append_row([new_id, h_team, a_team, oh, od, oa, "WAITING", "", "FALSE"])
+                            # [수정 2] 빈칸 8개를 넣어서 열 개수를 맞춤! (Result~PPDA까지)
+                            # 순서: ID, Home, Away, Odds*3, Status, Result, xG*2, Pass*2, PPDA*2, Settled
+                            ws_matches.append_row([
+                                new_id, h_team, a_team, oh, od, oa, 
+                                "WAITING", "", "", "", "", "", "", "", "FALSE"
+                            ])
                             st.success("등록 완료")
                             time.sleep(1)
                             st.rerun()
                     else:
-                        st.warning("팀 데이터가 없습니다.")
+                        st.warning("팀 데이터 없음")
                 except Exception as e:
-                    st.error(f"팀 데이터 로딩 실패: {e}")
+                    st.error(f"오류: {e}")
             else:
-                st.warning("Teams 시트가 없습니다.")
+                st.warning("Teams 시트 없음")
             
             st.markdown("---")
             if st.button("💰 정산 실행", key="settle_btn"):
@@ -318,11 +305,11 @@ with st.sidebar:
 # --- [4] 메인 화면 ---
 st.title("🏆 DDC CAMP-US CUP")
 
-if not nickname:
-    st.warning("👈 왼쪽 사이드바에서 닉네임을 먼저 입력해주세요!")
-    st.stop() # 닉네임 없으면 여기서 멈춤
+# 세션에 정보가 없으면 차단
+if not st.session_state['nickname']:
+    st.warning("👈 왼쪽 사이드바에서 로그인해주세요!")
+    st.stop()
 
-# 메인 탭 구성 (베팅 vs 랭킹)
 main_tab1, main_tab2 = st.tabs(["🔥 베팅하기", "📊 랭킹 보드"])
 
 with main_tab1:
@@ -338,7 +325,7 @@ with main_tab1:
         st.info("현재 오픈된 경기가 없습니다.")
     else:
         for idx, match in active_matches.iterrows():
-            with st.container(border=True): # 깔끔한 박스 디자인
+            with st.container(border=True):
                 st.subheader(f"{match['home']} vs {match['away']}")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("홈 승", match['home_odds'])
@@ -346,20 +333,23 @@ with main_tab1:
                 c3.metric("원정 승", match['away_odds'])
                 
                 sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{match['match_id']}", horizontal=True)
-                amt = st.number_input("베팅액", 100, user_info['balance'], 100, key=f"m_{match['match_id']}")
+                amt = st.number_input("베팅액", 100, st.session_state['user_info']['balance'], 100, key=f"m_{match['match_id']}")
                 
                 if st.button("베팅하기", key=f"b_{match['match_id']}"):
-                    if amt > user_info['balance']:
+                    if amt > st.session_state['user_info']['balance']:
                         st.error("잔액 부족!")
                     else:
-                        place_bet(nickname, match['match_id'], sel, amt)
+                        place_bet(st.session_state['nickname'], match['match_id'], sel, amt)
                         st.success("베팅 성공!")
+                        # 잔액 갱신
+                        new_info = get_user_info(st.session_state['nickname'])
+                        st.session_state['user_info'] = new_info
                         st.rerun()
 
     st.markdown("---")
     st.subheader("📜 내 베팅 내역")
     all_bets = ws_bets.get_all_records()
-    my_bets = [b for b in all_bets if str(b['nickname']) == str(nickname)]
+    my_bets = [b for b in all_bets if str(b['nickname']) == str(st.session_state['nickname'])]
     if my_bets:
         st.table(pd.DataFrame(my_bets)[['match_id', 'choice', 'amount', 'timestamp']])
 
