@@ -81,7 +81,8 @@ def calculate_auto_odds(home_elo, away_elo):
     prob_draw = 0.30 * (1 - abs(prob_home - 0.5) * 2)
     real_prob_home = prob_home * (1 - prob_draw)
     real_prob_away = (1 - prob_home) * (1 - prob_draw)
-
+    
+#배당률 상한선 설정
     MAX_ODDS = 5.0
 
     odds_home = max(1.05, round(1 / real_prob_home, 2))
@@ -306,43 +307,53 @@ with st.sidebar:
                 run_admin_settlement()
 
 # --- [4] 메인 화면 ---
-# --- [4] 메인 화면 ---
 st.title("🏆 DDC 캠퍼스 컵: 승부예측")
 
 if not st.session_state['nickname']:
     st.warning("👈 왼쪽 사이드바에서 로그인해주세요!")
     st.stop()
+
 # =========================================================
-# [수정] 강력해진 데이터 로딩 (재시도 로직 + 캐시 시간 증가)
+# [핵심] 1. 데이터를 가져오는 함수 (재시도 로직 포함)
 # =========================================================
-@st.cache_data(ttl=60) # 5초 -> 60초로 변경 (API 보호)
-def load_data():
-    # 최대 3번까지 시도해보고 안되면 포기하는 로직
+def fetch_google_data():
+    """구글 시트에서 데이터를 긁어오는 함수 (캐싱 안 함, 필요할 때만 호출)"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 데이터 가져오기 시도
             matches_data = ws_matches.get_all_records()
             bets_data = ws_bets.get_all_records()
             return pd.DataFrame(matches_data), bets_data
         except Exception as e:
-            # 에러가 나면?
             if attempt < max_retries - 1:
-                # 아직 기회가 남았으면 2초 쉬고 다시 시도
-                time.sleep(2)
+                time.sleep(2) # 2초 휴식 후 재시도
                 continue
             else:
-                # 3번 다 실패하면 에러 메시지 띄우기
-                st.error("구글 시트 연결이 불안정합니다. 잠시 후 새로고침 해주세요.")
-                st.stop() # 멈춤
+                st.error(f"데이터 로딩 실패: {e}")
+                st.stop()
 
-# 데이터 로딩
-df_matches, all_bets_data = load_data()
+# =========================================================
+# [핵심] 2. 세션 스테이트 초기화 (앱 켤 때 딱 1번만 실행됨)
+# =========================================================
+if 'db_matches' not in st.session_state:
+    with st.spinner("데이터를 불러오는 중..."):
+        df, bets = fetch_google_data()
+        st.session_state['db_matches'] = df
+        st.session_state['db_bets'] = bets
 
-# --- (이 아래부터 탭 구성 코드는 기존과 동일) ---
+# 유저가 수동으로 '새로고침' 버튼을 눌렀을 때만 다시 불러오기 기능 추가
+if st.button("🔄 최신 배당/결과 새로고침"):
+    with st.spinner("데이터 동기화 중..."):
+        df, bets = fetch_google_data()
+        st.session_state['db_matches'] = df
+        st.session_state['db_bets'] = bets
+        st.success("동기화 완료!")
+        time.sleep(0.5)
+        st.rerun()
 
-# 캐싱된 함수로 데이터 로딩 (API 호출 횟수 확 줄어듦!)
-df_matches, all_bets_data = load_data()
+# 이제부터는 변수에 저장된 데이터만 씁니다! (API 호출 X)
+df_matches = st.session_state['db_matches']
+all_bets_data = st.session_state['db_bets']
 
 # 탭 구성
 main_tab1, main_tab2 = st.tabs(["🔥 베팅하기", "📊 랭킹 보드"])
@@ -354,7 +365,7 @@ with main_tab1:
     else:
         active_matches = pd.DataFrame()
 
-    # 내 베팅 기록 정리
+    # 내 베팅 기록 정리 (메모리 데이터 사용)
     my_bet_history = {}
     for b in all_bets_data:
         if str(b['nickname']) == str(st.session_state['nickname']):
@@ -406,13 +417,24 @@ with main_tab1:
                             elif amt > current_balance:
                                 st.error("잔액 부족!")
                             else:
+                                # 1. 구글 시트에 쓰기 (Write는 쿼터가 널널함)
                                 place_bet(st.session_state['nickname'], m_id, sel, amt)
                                 
-                                # [중요] 베팅을 했으니 캐시를 비워야 다음 화면에서 바로 반영됨!
-                                load_data.clear() 
+                                # 2. [중요] 다시 읽어오지 않고, 메모리 데이터를 수동으로 업데이트 (Fake Update)
+                                # 이렇게 하면 구글 API를 안 쓰고도 화면에는 베팅된 것처럼 보임!
+                                new_bet_record = {
+                                    'nickname': st.session_state['nickname'],
+                                    'match_id': m_id,
+                                    'choice': sel,
+                                    'amount': amt,
+                                    'timestamp': str(datetime.now())
+                                }
+                                st.session_state['db_bets'].append(new_bet_record)
+                                
+                                # 잔액도 로컬에서 깎아버림
+                                st.session_state['user_info']['balance'] -= amt
                                 
                                 st.success("베팅 완료!")
-                                st.session_state['user_info'] = get_user_info(st.session_state['nickname'])
                                 time.sleep(0.5)
                                 st.rerun()
 
@@ -420,9 +442,13 @@ with main_tab1:
     st.subheader("📜 내 베팅 내역")
     if my_bet_history:
         my_bets_list = list(my_bet_history.values())
-        # 최신순 정렬 (timestamp 기준) - 내림차순
-        df_my_bets = pd.DataFrame(my_bets_list)[['match_id', 'choice', 'amount', 'timestamp']]
-        st.table(df_my_bets)
+        # 최신순 정렬 시도 (에러 방지를 위해 try-except)
+        try:
+            df_my_bets = pd.DataFrame(my_bets_list)
+            df_my_bets = df_my_bets.sort_values(by='timestamp', ascending=False)
+            st.table(df_my_bets[['match_id', 'choice', 'amount', 'timestamp']])
+        except:
+            st.table(pd.DataFrame(my_bets_list))
     else:
         st.caption("아직 베팅 내역이 없습니다.")
 
