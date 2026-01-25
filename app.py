@@ -81,6 +81,9 @@ def calculate_auto_odds(home_elo, away_elo):
     prob_draw = 0.30 * (1 - abs(prob_home - 0.5) * 2)
     real_prob_home = prob_home * (1 - prob_draw)
     real_prob_away = (1 - prob_home) * (1 - prob_draw)
+
+    MAX_ODDS = 5.0
+
     odds_home = max(1.05, round(1 / real_prob_home, 2))
     odds_draw = max(1.05, round(1 / prob_draw, 2))
     odds_away = max(1.05, round(1 / real_prob_away, 2))
