@@ -312,6 +312,7 @@ if not st.session_state['nickname']:
 
 main_tab1, main_tab2 = st.tabs(["🔥 베팅하기", "📊 랭킹 보드"])
 
+# --- [수정된 베팅 탭 코드] ---
 with main_tab1:
     matches = ws_matches.get_all_records()
     df_matches = pd.DataFrame(matches)
@@ -324,6 +325,10 @@ with main_tab1:
     if active_matches.empty:
         st.info("현재 오픈된 경기가 없습니다.")
     else:
+        # 베팅 한도 설정 (상수로 관리하면 나중에 바꾸기 편함)
+        MIN_BET = 500
+        MAX_BET = 1000
+
         for idx, match in active_matches.iterrows():
             with st.container(border=True):
                 st.subheader(f"{match['home']} vs {match['away']}")
@@ -332,26 +337,54 @@ with main_tab1:
                 c2.metric("무승부", match['draw_odds'])
                 c3.metric("원정 승", match['away_odds'])
                 
-                sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{match['match_id']}", horizontal=True)
-                amt = st.number_input("베팅액", 100, st.session_state['user_info']['balance'], 100, key=f"m_{match['match_id']}")
+                # [중요] 베팅 입력 UI 개선
+                current_balance = st.session_state['user_info']['balance']
                 
-                if st.button("베팅하기", key=f"b_{match['match_id']}"):
-                    if amt > st.session_state['user_info']['balance']:
-                        st.error("잔액 부족!")
-                    else:
-                        place_bet(st.session_state['nickname'], match['match_id'], sel, amt)
-                        st.success("베팅 성공!")
-                        # 잔액 갱신
-                        new_info = get_user_info(st.session_state['nickname'])
-                        st.session_state['user_info'] = new_info
-                        st.rerun()
+                # 1. 최소 금액(500원)도 없으면 베팅 불가 처리
+                if current_balance < MIN_BET:
+                    st.error(f"잔액 부족 (최소 {MIN_BET} P 필요)")
+                else:
+                    # 2. 선택지 (승/무/패)
+                    sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{match['match_id']}", horizontal=True)
+                    
+                    # 3. 베팅액 입력 (슬라이더나 숫자 입력 사용)
+                    # 최대 베팅액은 '경기제한(1000)'과 '내잔액' 중 작은 값으로 설정
+                    # 예: 내 돈이 800원 -> 최대 800원 / 내 돈이 5000원 -> 최대 1000원
+                    effective_max_bet = min(MAX_BET, current_balance)
+                    
+                    amt = st.number_input(
+                        f"베팅액 ({MIN_BET} ~ {MAX_BET})", 
+                        min_value=MIN_BET, 
+                        max_value=effective_max_bet, 
+                        step=100, 
+                        key=f"m_{match['match_id']}"
+                    )
+                    
+                    # 4. 베팅 버튼
+                    if st.button("베팅하기", key=f"b_{match['match_id']}"):
+                        # 더블 체크 (보안)
+                        if amt < MIN_BET or amt > MAX_BET:
+                            st.error(f"베팅 금액은 {MIN_BET}~{MAX_BET} 사이여야 합니다.")
+                        elif amt > current_balance:
+                            st.error("잔액이 부족합니다.")
+                        else:
+                            place_bet(st.session_state['nickname'], match['match_id'], sel, amt)
+                            st.success(f"{amt} P 베팅 성공!")
+                            
+                            # 잔액 갱신 및 화면 리로드
+                            new_info = get_user_info(st.session_state['nickname'])
+                            st.session_state['user_info'] = new_info
+                            time.sleep(0.5)
+                            st.rerun()
 
     st.markdown("---")
     st.subheader("📜 내 베팅 내역")
     all_bets = ws_bets.get_all_records()
     my_bets = [b for b in all_bets if str(b['nickname']) == str(st.session_state['nickname'])]
     if my_bets:
-        st.table(pd.DataFrame(my_bets)[['match_id', 'choice', 'amount', 'timestamp']])
+        # 보기 좋게 최신순 정렬 (timestamp 기준 내림차순) 같은 거 하면 좋음
+        df_my_bets = pd.DataFrame(my_bets)[['match_id', 'choice', 'amount', 'timestamp']]
+        st.table(df_my_bets)
 
 with main_tab2:
     show_ranking()
