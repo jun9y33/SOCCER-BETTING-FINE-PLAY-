@@ -309,17 +309,34 @@ st.title("🏆 DDC 캠퍼스 컵: 승부예측")
 if not st.session_state['nickname']:
     st.warning("👈 왼쪽 사이드바에서 로그인해주세요!")
     st.stop()
-
 # =========================================================
-# [핵심 수정] 데이터 가져오는 함수를 따로 만들고 캐싱 적용!
-# ttl=5: "5초 동안은 구글 시트에 다시 안 물어보고 기억한 거 쓸게요"
+# [수정] 강력해진 데이터 로딩 (재시도 로직 + 캐시 시간 증가)
 # =========================================================
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=60) # 5초 -> 60초로 변경 (API 보호)
 def load_data():
-    # 여기서 matches와 bets를 한 번에 가져옵니다.
-    matches_data = ws_matches.get_all_records()
-    bets_data = ws_bets.get_all_records()
-    return pd.DataFrame(matches_data), bets_data
+    # 최대 3번까지 시도해보고 안되면 포기하는 로직
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 데이터 가져오기 시도
+            matches_data = ws_matches.get_all_records()
+            bets_data = ws_bets.get_all_records()
+            return pd.DataFrame(matches_data), bets_data
+        except Exception as e:
+            # 에러가 나면?
+            if attempt < max_retries - 1:
+                # 아직 기회가 남았으면 2초 쉬고 다시 시도
+                time.sleep(2)
+                continue
+            else:
+                # 3번 다 실패하면 에러 메시지 띄우기
+                st.error("구글 시트 연결이 불안정합니다. 잠시 후 새로고침 해주세요.")
+                st.stop() # 멈춤
+
+# 데이터 로딩
+df_matches, all_bets_data = load_data()
+
+# --- (이 아래부터 탭 구성 코드는 기존과 동일) ---
 
 # 캐싱된 함수로 데이터 로딩 (API 호출 횟수 확 줄어듦!)
 df_matches, all_bets_data = load_data()
