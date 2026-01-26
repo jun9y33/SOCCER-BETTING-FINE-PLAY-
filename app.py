@@ -193,6 +193,29 @@ def run_admin_settlement():
             
     st.success(f"{success_cnt}경기 정산 완료")
 
+# =========================================================
+# [NEW] 베팅 트래픽 제어기 (1분에 50명 제한)
+# =========================================================
+@st.cache_resource
+def get_bet_traffic():
+    # start_time: 카운트 시작 시간, count: 현재 베팅 성공 횟수
+    return {'start_time': time.time(), 'count': 0}
+
+def check_traffic_status():
+    traffic = get_bet_traffic()
+    current_time = time.time()
+    
+    # 60초가 지났으면 리셋 (새로운 1분 시작)
+    if current_time - traffic['start_time'] > 60:
+        traffic['start_time'] = current_time
+        traffic['count'] = 0
+        
+    return traffic
+
+def increment_traffic():
+    traffic = get_bet_traffic()
+    traffic['count'] += 1
+
 # --- [4] 데이터 로딩 (재시도 로직) ---
 
 def fetch_all_data():
@@ -353,6 +376,7 @@ if not st.session_state['nickname']:
 
 tab_bet, tab_rank = st.tabs(["🔥 베팅", "🏆 랭킹"])
 
+# --- [수정된 베팅 탭 내부 로직] ---
 with tab_bet:
     active = df_matches[df_matches['status'] == 'WAITING'] if not df_matches.empty else pd.DataFrame()
     
@@ -365,12 +389,23 @@ with tab_bet:
     else:
         MIN, MAX = 500, 1000
         curr_nick = st.session_state['nickname']
-        # 잔액 조회 (로컬)
         try:
             curr_bal = int(df_users.loc[df_users['nickname']==curr_nick, 'balance'].values[0])
         except:
             curr_bal = 0
             
+        # [NEW] 현재 트래픽 상황 확인
+        traffic = check_traffic_status()
+        TRAFFIC_LIMIT = 50 # 1분당 50명 제한 (안전값)
+        is_traffic_jam = traffic['count'] >= TRAFFIC_LIMIT
+        
+        # 트래픽 현황판 표시 (관리자나 유저 모두에게 보여주면 좋음)
+        if is_traffic_jam:
+            st.warning(f"🚦 접속 폭주! 잠시 대기해주세요. ({traffic['count']}/{TRAFFIC_LIMIT})")
+        else:
+            # 여유가 있으면 초록불
+            st.caption(f"🟢 원활함 (현재 1분간 {traffic['count']}명 베팅 중)")
+
         for idx, match in active.iterrows():
             mid = match['match_id']
             with st.container(border=True):
@@ -381,7 +416,6 @@ with tab_bet:
                 c3.metric("패", match['away_odds'])
                 
                 if mid in bet_ids:
-                    # 이미 베팅함
                     rec = my_bets[my_bets['match_id'] == mid].iloc[0]
                     st.success(f"참여 완료: {rec['choice']} ({rec['amount']}P)")
                 else:
@@ -389,26 +423,33 @@ with tab_bet:
                     if curr_bal < MIN:
                         st.error("잔액 부족")
                     else:
-                        sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{mid}", horizontal=True)
-                        limit = min(MAX, curr_bal)
-                        amt = st.number_input(f"금액", MIN, limit, step=100, key=f"m_{mid}")
-                        
-                        if st.button("베팅하기", key=f"b_{mid}"):
-                            # 1. API 호출 최적화 함수 사용
-                            place_bet_optimized(curr_nick, mid, sel, amt, df_users)
+                        # 트래픽이 꽉 찼으면 아예 입력창을 막아버림 (API 보호)
+                        if is_traffic_jam:
+                            st.error(f"⛔ 현재 요청이 너무 많습니다. 10~20초 뒤에 다시 시도해주세요.")
+                        else:
+                            sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{mid}", horizontal=True)
+                            limit = min(MAX, curr_bal)
+                            amt = st.number_input(f"금액", MIN, limit, step=100, key=f"m_{mid}")
                             
-                            # 2. 로컬 데이터 강제 업데이트 (화면 갱신용)
-                            # 베팅 내역 추가
-                            new_row = {'nickname': curr_nick, 'match_id': mid, 'choice': sel, 'amount': amt, 'timestamp': str(datetime.now())}
-                            st.session_state['db_bets'] = pd.concat([st.session_state['db_bets'], pd.DataFrame([new_row])], ignore_index=True)
-                            
-                            # 유저 잔액 차감
-                            st.session_state['db_users'].loc[st.session_state['db_users']['nickname']==curr_nick, 'balance'] -= amt
-                            
-                            st.success("완료!")
-                            time.sleep(0.5)
-                            st.rerun()
-
+                            if st.button("베팅하기", key=f"b_{mid}"):
+                                # 버튼 누르는 순간 다시 한 번 체크 (0.1초 차이 방지)
+                                if check_traffic_status()['count'] >= TRAFFIC_LIMIT:
+                                    st.error("앗! 그 사이에 마감되었습니다. 잠시 후 다시 눌러주세요.")
+                                else:
+                                    # 1. API 호출 최적화 함수 사용
+                                    place_bet_optimized(curr_nick, mid, sel, amt, df_users)
+                                    
+                                    # 2. [NEW] 트래픽 카운트 증가!
+                                    increment_traffic()
+                                    
+                                    # 3. 로컬 업데이트
+                                    new_row = {'nickname': curr_nick, 'match_id': mid, 'choice': sel, 'amount': amt, 'timestamp': str(datetime.now())}
+                                    st.session_state['db_bets'] = pd.concat([st.session_state['db_bets'], pd.DataFrame([new_row])], ignore_index=True)
+                                    st.session_state['db_users'].loc[st.session_state['db_users']['nickname']==curr_nick, 'balance'] -= amt
+                                    
+                                    st.success("완료!")
+                                    time.sleep(0.5)
+                                    st.rerun()
 with tab_rank:
     if not df_users.empty:
         rank = df_users.sort_values('balance', ascending=False).head(10).reset_index(drop=True)
