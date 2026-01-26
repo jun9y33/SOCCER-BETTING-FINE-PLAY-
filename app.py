@@ -9,21 +9,22 @@ import math
 # --- [0] 기본 설정 ---
 st.set_page_config(page_title="DDC 승부예측 챌린지", page_icon="⚽", layout="wide")
 
-# --- [1] 구글 시트 연결 설정 ---
+# --- [1] 구글 시트 연결 설정 (완벽한 캐싱 적용) ---
+# 이 함수는 앱이 실행되는 동안 딱 1번만 실행됩니다. (새로고침 해도 실행 안 됨)
 @st.cache_resource
-def init_connection():
+def get_google_sheets():
+    # 1. 인증
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     key_dict = dict(st.secrets["gcp_service_account"])
     key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
     creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
     client = gspread.authorize(creds)
-    return client
-
-# 시트 연결 (실패 시 중단)
-try:
-    client = init_connection()
+    
+    # 2. 시트 열기 (이 부분이 API를 많이 먹는데, 캐싱으로 막음!)
     url = "https://docs.google.com/spreadsheets/d/1Q4YJBhdUEHwYdMFMSFqbhyNG73z6l2rCObsKALol7IM/edit?gid=0#gid=0" 
     sh = client.open_by_url(url)
+    
+    # 3. 워크시트 객체 반환
     ws_users = sh.worksheet("Users")
     ws_matches = sh.worksheet("Matches")
     ws_bets = sh.worksheet("Bets")
@@ -31,9 +32,16 @@ try:
         ws_teams = sh.worksheet("Teams")
     except:
         ws_teams = None
+        
+    return ws_users, ws_matches, ws_bets, ws_teams
+
+# 이제 연결 객체를 캐시에서 꺼내 씁니다. (API 호출 0회)
+try:
+    ws_users, ws_matches, ws_bets, ws_teams = get_google_sheets()
 except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
+
 
 # --- [2] 헬퍼 함수: API 호출 없이 행 번호 찾기 (핵심!) ---
 
@@ -214,13 +222,48 @@ if 'db_matches' not in st.session_state:
         st.session_state['db_users'] = u
 
 # 새로고침 버튼
-if st.button("🔄 데이터 동기화"):
-    with st.spinner("동기화 중..."):
-        m, b, u = fetch_all_data()
-        st.session_state['db_matches'] = m
-        st.session_state['db_bets'] = b
-        st.session_state['db_users'] = u
-        st.rerun()
+# =========================================================
+# [NEW] 서버 전체 공유 타이머 (Global Timer)
+# =========================================================
+@st.cache_resource
+def get_global_timer():
+    # 모든 유저가 공유하는 딕셔너리 (서버 메모리에 저장됨)
+    # 초기값: 0 (즉, 앱 켜지자마자는 누를 수 있음)
+    return {'last_sync_time': 0}
+
+global_timer = get_global_timer()
+
+# 쿨타임 설정 (초 단위) - 60초 추천
+COOLDOWN_SECONDS = 60 
+
+# 현재 시간과 마지막 실행 시간 비교
+current_time = time.time()
+time_diff = current_time - global_timer['last_sync_time']
+remaining_time = COOLDOWN_SECONDS - time_diff
+
+# --- [UI] 버튼 표시 로직 ---
+if remaining_time > 0:
+    # 1. 쿨타임 중일 때: 버튼 비활성화 (Disabled)
+    st.button(f"⏳ 데이터 동기화 대기 중... ({int(remaining_time)}초)", disabled=True)
+    st.caption(f"⚠️ 구글 서버 보호를 위해 **전체 사용자**가 {COOLDOWN_SECONDS}초에 한 번만 동기화할 수 있습니다.")
+else:
+    # 2. 쿨타임 끝났을 때: 버튼 활성화
+    if st.button("🔄 최신 데이터 동기화 (Click)"):
+        with st.spinner("구글 시트와 통신 중..."):
+            # (1) 글로벌 타이머 갱신 (이제 다른 사람들은 못 누름)
+            global_timer['last_sync_time'] = time.time()
+            
+            # (2) 데이터 가져오기
+            m, b, u = fetch_all_data()
+            st.session_state['db_matches'] = m
+            st.session_state['db_bets'] = b
+            st.session_state['db_users'] = u
+            
+            st.success("동기화 완료!")
+            time.sleep(1) # 메시지 읽을 시간 줌
+            st.rerun()
+
+# ---------------------------------------------------------
 
 # 변수 할당
 df_matches = st.session_state['db_matches']
