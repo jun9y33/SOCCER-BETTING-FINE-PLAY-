@@ -346,49 +346,56 @@ with st.sidebar:
             if st.button("💰 정산 실행"):
                 run_admin_settlement()
             
-            # 경기 등록 UI (간소화)
+            st.markdown("---")
+            st.subheader("경기 등록")
+
+            # 경기 등록 UI
             if ws_teams:
                 try:
+                    # 팀 데이터 가져오기
                     teams = pd.DataFrame(ws_teams.get_all_records())
                     t_list = teams['team_name'].tolist()
-                    c1, c2 = st.columns(2)
-                    h = c1.selectbox("홈", t_list, key='h')
-                    a = c2.selectbox("원정", t_list, index=1, key='a')
                     
+                    c1, c2 = st.columns(2)
+                    h = c1.selectbox("홈 팀", t_list, key='h')
+                    a = c2.selectbox("원정 팀", t_list, index=1, key='a')
+                    
+                    # 배당률 자동 계산 및 미리보기
                     h_elo = teams[teams['team_name']==h]['elo'].values[0]
                     a_elo = teams[teams['team_name']==a]['elo'].values[0]
                     oh, od, oa = calculate_auto_odds(h_elo, a_elo)
-                    st.caption(f"배당: {oh}/{od}/{oa}")
                     
-                    # --- [수정] 관리자 경기 등록 코드 (순서 맞추기) ---
-if st.button("경기 등록"):
-    nid = f"M{int(time.time())}"
-    
-    # 구글 시트 헤더 순서대로 빈칸을 채워서 넣어야 함 (총 15개)
-    # 1.id, 2.home, 3.away, 4.h_odd, 5.d_odd, 6.a_odd, 7.status, 
-    # 8.result, 9.h_xg, 10.a_xg, 11.h_pass, 12.a_pass, 13.h_ppda, 14.a_ppda, 15.is_settled
-    
-    ws_matches.append_row([
-        nid,                # A: match_id
-        h,                  # B: home
-        a,                  # C: away
-        oh,                 # D: home_odds
-        od,                 # E: draw_odds
-        oa,                 # F: away_odds
-        "WAITING",          # G: status
-        "",                 # H: result (빈칸)
-        "",                 # I: h_xg (빈칸)
-        "",                 # J: a_xg (빈칸)
-        "",                 # K: h_pass (빈칸)
-        "",                 # L: a_pass (빈칸)
-        "",                 # M: h_ppda (빈칸)
-        "",                 # N: a_ppda (빈칸)
-        "FALSE"             # O: is_settled (맨 뒤!)
-    ])
-    
-    st.success("등록됨! (새로고침 해주세요)")
-                except:
-                    st.error("팀 데이터 오류")
+                    st.info(f"📊 예상 배당: 승 {oh} / 무 {od} / 패 {oa}")
+                    
+                    # 경기 등록 버튼
+                    if st.button("경기 등록"):
+                        nid = f"M{int(time.time())}"
+                        
+                        # [핵심] 구글 시트 헤더 순서(15개)에 맞춰서 빈칸 채워 넣기
+                        # A~O열 순서: id, home, away, odds(3개), status, result, xg(2개), pass(2개), ppda(2개), settled
+                        ws_matches.append_row([
+                            nid,                # A: match_id
+                            h,                  # B: home
+                            a,                  # C: away
+                            oh,                 # D: home_odds
+                            od,                 # E: draw_odds
+                            oa,                 # F: away_odds
+                            "WAITING",          # G: status
+                            "",                 # H: result
+                            "",                 # I: h_xg
+                            "",                 # J: a_xg
+                            "",                 # K: h_pass
+                            "",                 # L: a_pass
+                            "",                 # M: h_ppda
+                            "",                 # N: a_ppda
+                            "FALSE"             # O: is_settled (맨 뒤!)
+                        ])
+                        st.success("경기 등록 완료! (새로고침 해주세요)")
+                        
+                except Exception as e:
+                    st.error(f"팀 데이터 로딩 또는 등록 중 오류 발생: {e}")
+            else:
+                st.error("'Teams' 시트가 연결되지 않았습니다.")
 
 # 메인 화면
 st.title("🏆 DDC 캠퍼스 컵")
