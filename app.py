@@ -360,10 +360,33 @@ with st.sidebar:
                     oh, od, oa = calculate_auto_odds(h_elo, a_elo)
                     st.caption(f"배당: {oh}/{od}/{oa}")
                     
-                    if st.button("경기 등록"):
-                        nid = f"M{int(time.time())}"
-                        ws_matches.append_row([nid, h, a, oh, od, oa, "WAITING", "", "", "", "", "", "", "", "FALSE"])
-                        st.success("등록됨")
+                    # --- [수정] 관리자 경기 등록 코드 (순서 맞추기) ---
+if st.button("경기 등록"):
+    nid = f"M{int(time.time())}"
+    
+    # 구글 시트 헤더 순서대로 빈칸을 채워서 넣어야 함 (총 15개)
+    # 1.id, 2.home, 3.away, 4.h_odd, 5.d_odd, 6.a_odd, 7.status, 
+    # 8.result, 9.h_xg, 10.a_xg, 11.h_pass, 12.a_pass, 13.h_ppda, 14.a_ppda, 15.is_settled
+    
+    ws_matches.append_row([
+        nid,                # A: match_id
+        h,                  # B: home
+        a,                  # C: away
+        oh,                 # D: home_odds
+        od,                 # E: draw_odds
+        oa,                 # F: away_odds
+        "WAITING",          # G: status
+        "",                 # H: result (빈칸)
+        "",                 # I: h_xg (빈칸)
+        "",                 # J: a_xg (빈칸)
+        "",                 # K: h_pass (빈칸)
+        "",                 # L: a_pass (빈칸)
+        "",                 # M: h_ppda (빈칸)
+        "",                 # N: a_ppda (빈칸)
+        "FALSE"             # O: is_settled (맨 뒤!)
+    ])
+    
+    st.success("등록됨! (새로고침 해주세요)")
                 except:
                     st.error("팀 데이터 오류")
 
