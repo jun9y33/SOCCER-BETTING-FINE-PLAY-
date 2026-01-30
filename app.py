@@ -456,11 +456,11 @@ with tab_bet:
                     if curr_bal < MIN:
                         st.error("잔액 부족")
                     else:
-                        sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{mid}", horizontal=True)
+                        sel = st.radio("선택", ["HOME", "DRAW", "AWAY"], key=f"s_{mid}_{idx}", horizontal=True)
                         limit = min(MAX, curr_bal)
-                        amt = st.number_input(f"금액", MIN, limit, step=100, key=f"m_{mid}")
+                        amt = st.number_input(f"금액", MIN, limit, step=100, key=f"m_{mid}_{idx}")
                         
-                        if st.button("베팅하기", key=f"b_{mid}"):
+                        if st.button("베팅하기", key=f"b_{mid}_{idx}"):
                             place_bet_optimized(curr_nick, mid, sel, amt, df_users)
                             
                             new_row = {'nickname': curr_nick, 'match_id': mid, 'choice': sel, 'amount': amt, 'timestamp': str(datetime.now())}
